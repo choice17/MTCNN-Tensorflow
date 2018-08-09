@@ -29,10 +29,10 @@ import argparse
 import numpy as np
 import cv2
 import numpy.random as npr
+sys.path.append(os.path.dirname(os.getcwd()))
+from src.tools import IoU
 
-from tools import IoU
 
-sys.path.append('../')
 
 
 def main(args):
@@ -71,7 +71,11 @@ def main(args):
         im_path = annotation[0]
         bbox = list(map(float, annotation[1:]))
         boxes = np.array(bbox, dtype=np.float32).reshape(-1, 4)
-        img = cv2.imread(os.path.join(im_dir, im_path + '.jpg'))
+        imgpath = os.path.join(im_dir, im_path + '.jpg')
+        img = cv2.imread(imgpath)
+        if img is None:
+            print('Cannot find %s'%imgpath)
+            continue
         idx += 1
         if idx % 10000 == 0:
             print(idx, 'images done')
@@ -98,7 +102,7 @@ def main(args):
                 n_idx += 1
                 neg_num += 1
             print('%s images done, pos: %s part: %s neg: %s' %
-                  (idx, p_idx, d_idx, n_idx))
+                  (idx, p_idx, d_idx, n_idx), end='\r')
 
         for box in boxes:
             x1, y1, x2, y2 = box

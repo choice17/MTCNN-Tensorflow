@@ -5,46 +5,20 @@ import math
 from os.path import join, exists
 import cv2
 import numpy as np
-from BBox_utils import getDataFromTxt,processImage,shuffle_in_unison_scary,BBox
-from Landmark_utils import show_landmark,rotate,flip
+
 import random
 import tensorflow as tf
 import sys
 import numpy.random as npr
-dstdir = "12/train_PNet_landmark_aug"
-OUTPUT = '12'
-if not exists(OUTPUT): os.mkdir(OUTPUT)
-if not exists(dstdir): os.mkdir(dstdir)
-assert(exists(dstdir) and exists(OUTPUT))
+import argparse
 
-def IoU(box, boxes):
-    """Compute IoU between detect box and gt boxes
+import datetime
 
-    Parameters:
-    ----------
-    box: numpy array , shape (5, ): x1, y1, x2, y2, score
-        input box
-    boxes: numpy array, shape (n, 4): x1, y1, x2, y2
-        input ground truth boxes
+sys.path.append(os.path.dirname(os.getcwd()))
+from src.tools import getDataFromTxt, processImage, shuffle_in_unison_scary, BBox, IoU
+from src.tools import show_landmark, rotate, flip
 
-    Returns:
-    -------
-    ovr: numpy.array, shape (n, )
-        IoU
-    """
-    box_area = (box[2] - box[0] + 1) * (box[3] - box[1] + 1)
-    area = (boxes[:, 2] - boxes[:, 0] + 1) * (boxes[:, 3] - boxes[:, 1] + 1)
-    xx1 = np.maximum(box[0], boxes[:, 0])
-    yy1 = np.maximum(box[1], boxes[:, 1])
-    xx2 = np.minimum(box[2], boxes[:, 2])
-    yy2 = np.minimum(box[3], boxes[:, 3])
-     # compute the width and height of the bounding box
-    w = np.maximum(0, xx2 - xx1 + 1)
-    h = np.maximum(0, yy2 - yy1 + 1)
-    inter = w * h
-    ovr = inter*1.0 / (box_area + area - inter)
-    return ovr
-def GenerateData(ftxt, output,net,argument=False):
+def GenerateData(ftxt, output, dstdir, net,argument=False):
     if net == "PNet":
         size = 12
     elif net == "RNet":
@@ -52,10 +26,12 @@ def GenerateData(ftxt, output,net,argument=False):
     elif net == "ONet":
         size = 48
     else:
-        print 'Net type error'
+        print ('Net type error')
         return
+    fdir = os.path.dirname(ftxt)
+
     image_id = 0
-    f = open(join(OUTPUT,"landmark_%s_aug.txt" %(size)),'w')
+    f = open(join(OUTPUT,"landmark_%s.txt" %(size)),'w')
     #dstdir = "train_landmark_few"
    
     data = getDataFromTxt(ftxt)
@@ -63,10 +39,15 @@ def GenerateData(ftxt, output,net,argument=False):
     #image_path bbox landmark(5*2)
     for (imgPath, bbox, landmarkGt) in data:
         #print imgPath
+        #if fdir != '':
+        #    imgPath = os.path.join(fdir, imgPath)
         F_imgs = []
         F_landmarks = []        
         img = cv2.imread(imgPath)
-        assert(img is not None)
+        #assert(img is not None)
+        if img is None:
+            print('cannot found image %s'%imgPath)
+            continue
         img_h,img_w,img_c = img.shape
         gt_box = np.array([bbox.left,bbox.top,bbox.right,bbox.bottom])
         f_face = img[bbox.top:bbox.bottom+1,bbox.left:bbox.right+1]
@@ -82,8 +63,6 @@ def GenerateData(ftxt, output,net,argument=False):
         landmark = np.zeros((5, 2))        
         if argument:
             idx = idx + 1
-            if idx % 100 == 0:
-                print idx, "images done"
             x1, y1, x2, y2 = gt_box
             #gt's width
             gt_w = x2 - x1 + 1
@@ -103,7 +82,9 @@ def GenerateData(ftxt, output,net,argument=False):
                 ny2 = ny1 + bbox_size
                 if nx2 > img_w or ny2 > img_h:
                     continue
-                crop_box = np.array([nx1,ny1,nx2,ny2])
+                crop_idx = [nx1,ny1,nx2,ny2]
+                crop_box = np.array(crop_idx)
+                nx1, ny1, nx2, ny2 = list(map(int, crop_idx))
                 cropped_im = img[ny1:ny2+1,nx1:nx2+1,:]
                 resized_im = cv2.resize(cropped_im, (size, size))
                 #cal iou
@@ -159,8 +140,9 @@ def GenerateData(ftxt, output,net,argument=False):
             F_imgs, F_landmarks = np.asarray(F_imgs), np.asarray(F_landmarks)
             #print F_imgs.shape
             #print F_landmarks.shape
+            
             for i in range(len(F_imgs)):
-                print image_id
+                print('image_id: %d augmented: %d'%(idx, image_id),end='\r')
 
                 if np.sum(np.where(F_landmarks[i] <= 0, 1, 0)) > 0:
                     continue
@@ -177,15 +159,37 @@ def GenerateData(ftxt, output,net,argument=False):
     #print F_landmarks.shape
     #F_imgs = processImage(F_imgs)
     #shuffle_in_unison_scary(F_imgs, F_landmarks)
-    
+    print()
     f.close()
     return F_imgs,F_landmarks
 
+def argparser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--size', default=12, type=int, help='crop size')
+    return parser.parse_args()
+
 if __name__ == '__main__':
     # train data
-    net = "PNet"
+
+    args = argparser()
+    imsize = args.size
+
+
+    OUTPUT = "native_%d" % imsize
+    dstdir = "native_%d/landmark" % imsize
+    train_txt = "LFW_Landmarks/trainImageList.txt"
+    
+    if imsize == 12: net = "PNet"
+    if imsize == 24: net = "RNet"
+    if imsize == 48: net = "ONet"
+
+    if not exists(OUTPUT): os.mkdir(OUTPUT)
+    if not exists(dstdir): os.mkdir(dstdir)
+    assert(exists(dstdir) and exists(OUTPUT))
     #train_txt = "train.txt"
-    train_txt = "trainImageList.txt"
-    imgs,landmarks = GenerateData(train_txt, OUTPUT,net,argument=True)
+    
+    print('Starting %s %s'% (os.path.basename(__file__), datetime.datetime.now()))
+    GenerateData(train_txt, OUTPUT, dstdir, net, argument=True)
+    print('Starting %s %s'% (os.path.basename(__file__), datetime.datetime.now()))
     
    

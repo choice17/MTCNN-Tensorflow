@@ -89,7 +89,8 @@ class LayerFactory(object):
 
     def new_conv(self, name: str, kernel_size: tuple, channels_output: int,
                  stride_size: tuple, padding: str='SAME',
-                 group: int=1, biased: bool=True, relu: bool=True, input_layer_name: str=None):
+                 group: int=1, biased: bool=True, relu: bool=True, input_layer_name: str=None,
+                 output_name: str=None, is_output: bool=False, task: str='all'):
         """
         Creates a convolution layer for the network.
         :param name: name for the layer
@@ -127,16 +128,19 @@ class LayerFactory(object):
             # Add the biases, if required
             if biased:
                 biases = self.__make_var('biases', [channels_output])
-                output = tf.nn.bias_add(output, biases)
+                if output_name is not None:
+                    output = tf.nn.bias_add(output, biases, name=output_name)
+                else:
+                    output = tf.nn.bias_add(output, biases)
 
             # Apply ReLU non-linearity, if required
             if relu:
                 output = tf.nn.relu(output, name=scope.name)
 
 
-        self.__network.add_layer(name, layer_output=output)
+        self.__network.add_layer(name, layer_output=output, is_output=is_output, task=task)
 
-    def new_prelu(self, name: str, input_layer_name: str=None):
+    def new_prelu(self, name: str, input_layer_name: str=None, task: str='all'):
         """
         Creates a new prelu layer with the given name and input.
         :param name: name for this layer.
@@ -149,7 +153,7 @@ class LayerFactory(object):
             alpha = self.__make_var('alpha', shape=[channels_input])
             output = tf.nn.relu(input_layer) + tf.multiply(alpha, -tf.nn.relu(-input_layer))
 
-        self.__network.add_layer(name, layer_output=output)
+        self.__network.add_layer(name, layer_output=output, task=task)
 
     def new_max_pool(self, name:str, kernel_size: tuple, stride_size: tuple, padding='SAME',
                      input_layer_name: str=None):
@@ -175,7 +179,8 @@ class LayerFactory(object):
 
         self.__network.add_layer(name, layer_output=output)
 
-    def new_fully_connected(self, name: str, output_count: int, relu=True, input_layer_name: str=None):
+    def new_fully_connected(self, name: str, output_count: int, relu=True, 
+                            input_layer_name: str=None, is_output: bool=False, task: str='all'):
         """
         Creates a new fully connected layer.
 
@@ -196,9 +201,9 @@ class LayerFactory(object):
 
             fc = operation(vectorized_input, weights, biases, name=name)
 
-        self.__network.add_layer(name, layer_output=fc)
+        self.__network.add_layer(name, layer_output=fc, is_output=is_output, task=task)
 
-    def new_softmax(self, name, axis, input_layer_name: str=None):
+    def new_softmax(self, name, axis, input_layer_name: str=None, is_output: bool=False):
         """
         Creates a new softmax layer
         :param name: name to set for the layer
@@ -213,5 +218,5 @@ class LayerFactory(object):
         normalize = tf.reduce_sum(target_exp, axis, keep_dims=True)
         softmax = tf.div(target_exp, normalize, name)
 
-        self.__network.add_layer(name, layer_output=softmax)
+        self.__network.add_layer(name, layer_output=softmax, is_output=is_output)
 

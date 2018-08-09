@@ -23,7 +23,10 @@
 # SOFTWARE.
 
 import tensorflow as tf
-from src.mtcnn import train_net, PNet
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.dirname(os.getcwd())))
+from mtcnn import train_net, PNet
 
 
 def train_Pnet(training_data, base_lr, loss_weight,
@@ -55,13 +58,15 @@ if __name__ == '__main__':
     load_filename = './pretrained/initial_weight_pnet.npy'
     save_filename = './save_model/new_saver/pnet/pnet'
     training_data = ['./prepare_data/pnet_data_for_cls.tfrecords',
-                     './prepare_data/pnet_data_for_bbx.tfrecords']
-    device = '/gpu:0'
+                     './prepare_data/pnet_data_for_bbx.tfrecords',
+                     './prepare_data/pnet_data_for_landmark.tfrecords']
+    #device = '/gpu:0'
+    device = '/cpu:0'
     train_Pnet(training_data=training_data,
                base_lr=0.0001,
                loss_weight=[1.0, 0.5, 0.5],
-               train_mode=2,
-               num_epochs=[200, 200, 200],
+               train_mode=3,
+               num_epochs=[128, 128, 128],
                load_model=False,
                load_filename=load_filename,
                save_model=True,
@@ -69,3 +74,4 @@ if __name__ == '__main__':
                num_iter_to_save=100,
                device=device,
                gpu_memory_fraction=0.3)
+

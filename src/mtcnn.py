@@ -32,13 +32,15 @@
 # and provides the keypoints of faces as outputs along with the bounding boxes.
 #
 
+import os
 import cv2
 import numpy as np
 import pkg_resources
+import traceback
 import tensorflow as tf
-from mtcnn.layer_factory import LayerFactory
-from mtcnn.network import Network
-from mtcnn.exceptions import InvalidImage
+from layer_factory import LayerFactory
+from network import Network
+#from mtcnn.exceptions import InvalidImage
 
 __author__ = "Iván de Paz Centeno"
 
@@ -61,15 +63,22 @@ class PNet(Network):
         layer_factory.new_conv(name='conv3', kernel_size=(3, 3), channels_output=32, stride_size=(1, 1),
                                padding='VALID', relu=False)
         layer_factory.new_prelu(name='prelu3')
-        layer_factory.new_conv(name='conv4-1', kernel_size=(1, 1), channels_output=2, stride_size=(1, 1), relu=False)
-        layer_factory.new_softmax(name='prob1', axis=3)
-
+        layer_factory.new_conv(name='conv4-1', kernel_size=(1, 1), channels_output=2, stride_size=(1, 1),
+                               relu=False, task='cls')
+        layer_factory.new_softmax(name='cls', axis=3, is_output=True)
         layer_factory.new_conv(name='conv4-2', kernel_size=(1, 1), channels_output=4, stride_size=(1, 1),
-                               input_layer_name='prelu3', relu=False)
+                               input_layer_name='prelu3', relu=False, output_name='bbx', is_output=True,
+                               task='bbx')
+
+        layer_factory.new_conv(name='conv4-3', kernel_size=(1, 1), channels_output=10, stride_size=(1, 1),
+                               input_layer_name='prelu3', relu=False, output_name='pts', is_output=True,
+                               task='pts')
 
     def _feed(self, image):
-        return self._session.run(['pnet/conv4-2/BiasAdd:0', 'pnet/prob1:0'], feed_dict={'pnet/input:0': image})
+        return self._session.run(['pnet/cls:0', 'pnet/conv4-2/bbx:0'], feed_dict={'pnet/input:0': image})
 
+    def _feedv2(self, image):
+        return self._session.run(['pnet/cls:0', 'pnet/conv4-2/bbx:0', 'pnet/conv4-3/pts:0'], feed_dict={'pnet/input:0': image})
 
 class RNet(Network):
     """
@@ -94,13 +103,20 @@ class RNet(Network):
         layer_factory.new_prelu(name='prelu3')
         layer_factory.new_fully_connected(name='fc1', output_count=128, relu=False)  # shouldn't the name be "fc1"?
         layer_factory.new_prelu(name='prelu4')
-        layer_factory.new_fully_connected(name='fc2-1', output_count=2, relu=False)   # shouldn't the name be "fc2-1"?
-        layer_factory.new_softmax(name='prob1', axis=1)
+        layer_factory.new_fully_connected(name='fc2-1', output_count=2, relu=False, task='cls')   # shouldn't the name be "fc2-1"?
+        layer_factory.new_softmax(name='cls', axis=1, is_output=True)
 
-        layer_factory.new_fully_connected(name='fc2-2', output_count=4, relu=False, input_layer_name='prelu4')
+        layer_factory.new_fully_connected(name='fc2-2', output_count=4, relu=False, input_layer_name='prelu4',
+                                        output_name='bbx', is_output=True, task='bbx')
+        layer_factory.new_fully_connected(name='fc2-3', output_count=8, relu=False, input_layer_name='prelu4',
+                                        output_name='pts', is_output=True, task='pts')
 
     def _feed(self, image):
-        return self._session.run(['rnet/fc2-2/fc2-2:0', 'rnet/prob1:0'], feed_dict={'rnet/input:0': image})
+        return self._session.run(['rnet/cls:0', 'rnet/fc2-2/bbx:0'], feed_dict={'rnet/input:0': image})
+    
+    def _feedv2(self, image):
+        return self._session.run(['rnet/cls:0', 'rnet/fc2-2/bbx:0', 'rnet/fc2-2/pts:0'], feed_dict={'rnet/input:0': image})
+
 
 
 class ONet(Network):
@@ -128,17 +144,18 @@ class ONet(Network):
         layer_factory.new_prelu(name='prelu4')
         layer_factory.new_fully_connected(name='fc1', output_count=256, relu=False)
         layer_factory.new_prelu(name='prelu5')
-        layer_factory.new_fully_connected(name='fc2-1', output_count=2, relu=False)
-        layer_factory.new_softmax(name='prob1', axis=1)
+        layer_factory.new_fully_connected(name='fc2-1', output_count=2, relu=False, task='cls')
+        layer_factory.new_softmax(name='cls', axis=1, is_output=True)
 
-        layer_factory.new_fully_connected(name='fc2-2', output_count=4, relu=False, input_layer_name='prelu5')
+        layer_factory.new_fully_connected(name='fc2-2', output_count=4, relu=False, input_layer_name='prelu5',
+                                        output_name='bbx', is_output=True, task='bbx')
 
-        layer_factory.new_fully_connected(name='fc2-3', output_count=10, relu=False, input_layer_name='prelu5')
+        layer_factory.new_fully_connected(name='fc2-3', output_count=10, relu=False, input_layer_name='prelu5',
+                                        output_name='pts', is_output=True, task='pts')
 
     def _feed(self, image):
-        return self._session.run(['onet/fc2-2/fc2-2:0', 'onet/fc2-3/fc2-3:0', 'onet/prob1:0'],
+        return self._session.run(['onet/cls:0', 'onet/fc2-2/bbx:0', 'onet/fc2-3/pts:0'],
                                  feed_dict={'onet/input:0': image})
-
 
 class StageStatus(object):
     """
@@ -398,7 +415,7 @@ class MTCNN(object):
         :return: list containing all the bounding boxes detected with their keypoints.
         """
         if img is None or not hasattr(img, "shape"):
-            raise InvalidImage("Image not valid.")
+            raise ValueError("Image not valid.")
 
         if net_type == 'PNet': stage_included_idx = 1
         elif net_type == 'RNet': stage_included_idx = 2
@@ -424,6 +441,7 @@ class MTCNN(object):
         [total_boxes, points] = result
 
         bounding_boxes = []
+
 
         for bounding_box, keypoints in zip(total_boxes, points.T):
 
@@ -619,8 +637,8 @@ class MTCNN(object):
     def __del__(self):
         self.__session.close()
 
-    '''training section'''
-    def read_and_decode(filename_queue, label_type, shape):
+    '''=================================training section======================================='''
+def read_and_decode(filename_queue, label_type, shape):
 
     reader = tf.TFRecordReader()
     _, serialized_example = reader.read(filename_queue)
@@ -672,11 +690,11 @@ def inputs(filename, batch_size, num_epochs, label_type, shape):
 
 def train_net(Net, training_data, base_lr, loss_weight,
               train_mode, num_epochs=[1, None, None],
-              batch_size=64, weight_decay=4e-3,
+              batch_size=[64, 64, 64], weight_decay=4e-3,
               load_model=False, load_filename=None,
               save_model=False, save_filename=None,
               num_iter_to_save=10000,
-              gpu_memory_fraction=1):
+              gpu_memory_fraction=0.5):
 
     images = []
     labels = []
@@ -686,110 +704,129 @@ def train_net(Net, training_data, base_lr, loss_weight,
         shape = 24
     elif Net.__name__ == 'ONet':
         shape = 48
-    for index in range(train_mode):
-        image, label = inputs(filename=[training_data[index]],
-                              batch_size=batch_size,
-                              num_epochs=num_epochs[index],
-                              label_type=tasks[index],
-                              shape=shape)
-        images.append(image)
-        labels.append(label)
-    while len(images) is not 3:
-        images.append(tf.placeholder(tf.float32, [None, shape, shape, 3]))
-        labels.append(tf.placeholder(tf.float32))
-    net = Net((('cls', images[0]), ('bbx', images[1]), ('pts', images[2])),
-              weight_decay_coeff=weight_decay)
 
-    print('all trainable variables:')
-    all_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES)
-    for var in all_vars:
-        print(var)
-
-    print('all local variable:')
-    local_variables = tf.local_variables()
-    for l_v in local_variables:
-        print(l_v.name)
-
-    prefix = str(all_vars[0].name[0:5])
-    out_put = net.get_all_output()
-    cls_output = tf.reshape(out_put[0], [-1, 2])
-    bbx_output = tf.reshape(out_put[1], [-1, 4])
-    pts_output = tf.reshape(out_put[2], [-1, 10])
-
-    # cls loss
-    softmax_loss = loss_weight[0] * \
-        tf.reduce_mean(
-        tf.nn.softmax_cross_entropy_with_logits(labels=labels[0],
-                                                logits=cls_output))
-    weight_losses_cls = net.get_weight_decay()['cls']
-    losses_cls = softmax_loss + tf.add_n(weight_losses_cls)
-
-    # bbx loss
-    square_bbx_loss = loss_weight[1] * \
-        tf.reduce_mean(tf.squared_difference(bbx_output, labels[1]))
-    weight_losses_bbx = net.get_weight_decay()['bbx']
-    losses_bbx = square_bbx_loss + tf.add_n(weight_losses_bbx)
-
-    # pts loss
-    square_pts_loss = loss_weight[2] * \
-        tf.reduce_mean(tf.squared_difference(pts_output, labels[2]))
-    weight_losses_pts = net.get_weight_decay()['pts']
-    losses_pts = square_pts_loss + tf.add_n(weight_losses_pts)
-
-    global_step_cls = tf.Variable(1, name='global_step_cls', trainable=False)
-    global_step_bbx = tf.Variable(1, name='global_step_bbx', trainable=False)
-    global_step_pts = tf.Variable(1, name='global_step_pts', trainable=False)
-
-    train_cls = tf.train.AdamOptimizer(learning_rate=base_lr) \
-                        .minimize(losses_cls, global_step=global_step_cls)
-    train_bbx = tf.train.AdamOptimizer(learning_rate=base_lr) \
-                        .minimize(losses_bbx, global_step=global_step_bbx)
-    train_pts = tf.train.AdamOptimizer(learning_rate=base_lr) \
-                        .minimize(losses_pts, global_step=global_step_pts)
-
-    init_op = tf.group(tf.global_variables_initializer(),
-                       tf.local_variables_initializer())
-
+    graph = tf.Graph()
     config = tf.ConfigProto()
     config.allow_soft_placement = True
     config.gpu_options.per_process_gpu_memory_fraction = gpu_memory_fraction
     config.gpu_options.allow_growth = True
 
-    loss_agg_cls = [0]
-    loss_agg_bbx = [0]
-    loss_agg_pts = [0]
-    step_value = [1, 1, 1]
+    with tf.Session(graph=graph, config=config) as sess:
+        for index in range(train_mode):
+            image, label = inputs(filename=[training_data[index]],
+                                batch_size=batch_size[index],
+                                num_epochs=num_epochs[index],
+                                label_type=tasks[index],
+                                shape=shape)
+            images.append(image)
+            labels.append(label)
+            
+        while len(images) is not 3:
+            images.append(tf.placeholder(tf.float32, [None, shape, shape, 3]))
+            labels.append(tf.placeholder(tf.float32))
 
-    with tf.Session(config=config) as sess:
+    
+             #(('cls', images[0]), ('bbx', images[1]), ('pts', images[2])),
+              #weight_decay_coeff=weight_decay)
+        net = Net(sess, True)
+        print('all trainable variables:')
+        all_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES)
+        for var in all_vars:
+            print(var)
+
+        print('all local variable:')
+        local_variables = tf.local_variables()
+        for l_v in local_variables:
+            print(l_v.name)
+
+        prefix = str(all_vars[0].name[0:5])
+        out_put = net.get_all_output()
+        cls_output = tf.reshape(out_put[0], [-1, 2])
+        bbx_output = tf.reshape(out_put[1], [-1, 4])
+        pts_output = tf.reshape(out_put[2], [-1, 10])
+
+        # cls loss
+        softmax_loss = loss_weight[0] * \
+            tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels[0],
+                                                    logits=cls_output))
+        weight_losses_cls = net.get_weight_decay(item_type='cls')
+        losses_cls = softmax_loss + 0.5 * tf.reduce_mean(list(map(tf.reduce_sum, weight_losses_cls)))
+
+        # bbx loss
+        square_bbx_loss = loss_weight[1] * \
+            tf.reduce_mean(tf.squared_difference(bbx_output, labels[1]))
+        weight_losses_bbx = net.get_weight_decay(item_type='bbx')
+        losses_bbx = square_bbx_loss + 0.5 * tf.reduce_mean(list(map(tf.reduce_sum, weight_losses_bbx)))
+
+        # pts loss
+        square_pts_loss = loss_weight[2] * \
+            tf.reduce_mean(tf.squared_difference(pts_output, labels[2]))
+        weight_losses_pts = net.get_weight_decay(item_type='pts')
+        losses_pts = square_pts_loss + 0.5 * tf.reduce_mean(list(map(tf.reduce_sum, weight_losses_pts)))
+
+        global_step_cls = tf.Variable(1, name='global_step_cls', trainable=False)
+        global_step_bbx = tf.Variable(1, name='global_step_bbx', trainable=False)
+        global_step_pts = tf.Variable(1, name='global_step_pts', trainable=False)
+
+        train_cls = tf.train.AdamOptimizer(learning_rate=base_lr) \
+                            .minimize(losses_cls, global_step=global_step_cls)
+        train_bbx = tf.train.AdamOptimizer(learning_rate=base_lr) \
+                            .minimize(losses_bbx, global_step=global_step_bbx)
+        train_pts = tf.train.AdamOptimizer(learning_rate=base_lr) \
+                            .minimize(losses_pts, global_step=global_step_pts)
+
+        init_op = tf.group(tf.global_variables_initializer(),
+                           tf.local_variables_initializer())
+        loss_agg_cls = [0]
+        loss_agg_bbx = [0]
+        loss_agg_pts = [0]
+        step_value = [1, 1, 1]
+       
         sess.run(init_op)
         saver = tf.train.Saver(max_to_keep=200000)
         if load_model:
             saver.restore(sess, load_filename)
         else:
-            net.load(load_filename, sess, prefix)
+            try:
+                net.load(load_filename, sess, prefix)
+            except:
+                print(traceback.format_exc())
+                print('warning cannot find initial weights')
         if save_model:
             save_dir = os.path.split(save_filename)[0]
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        net_scope = Net.__class__.__name__.lower()
+        input_ph = ''.join([net_scope, 'input'])
         try:
+            #choic = 0
             while not coord.should_stop():
                 choic = np.random.randint(0, train_mode)
                 if choic == 0:
+                    image_batch = sess.run(images[0])
                     _, loss_value_cls, step_value[0] = sess.run(
-                        [train_cls, softmax_loss, global_step_cls])
+                        [train_cls, softmax_loss, global_step_cls],
+                        feed_dict={net.get_layer('data'):image_batch})
                     loss_agg_cls.append(loss_value_cls)
                 elif choic == 1:
+                    image_batch = sess.run(images[1])
                     _, loss_value_bbx, step_value[1] = sess.run(
-                        [train_bbx, square_bbx_loss, global_step_bbx])
+                        [train_bbx, square_bbx_loss, global_step_bbx],
+                        feed_dict={net.get_layer('data'):image_batch})
                     loss_agg_bbx.append(loss_value_bbx)
                 else:
+                    image_batch = sess.run(images[2])
                     _, loss_value_pts, step_value[2] = sess.run(
-                        [train_pts, square_pts_loss, global_step_pts])
+                        [train_pts, square_pts_loss, global_step_pts],
+                        feed_dict={net.get_layer('data'):image_batch})
                     loss_agg_pts.append(loss_value_pts)
+                choic += 1
+                #if choic == 3: choic = 0 
 
-                if sum(step_value) % (100 * train_mode) == 0:
+                if sum(step_value) % (10 * train_mode) == 0:
                     agg_cls = sum(loss_agg_cls) / len(loss_agg_cls)
                     agg_bbx = sum(loss_agg_bbx) / len(loss_agg_bbx)
                     agg_pts = sum(loss_agg_pts) / len(loss_agg_pts)

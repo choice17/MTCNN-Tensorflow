@@ -3,7 +3,7 @@
 
 #MIT License
 #
-#Copyright (c) 2018 Iván de Paz Centeno
+#Copyright (c) 2018 Takchoi Yu
 #
 #Permission is hereby granted, free of charge, to any person obtaining a copy
 #of this software and associated documentation files (the "Software"), to deal
@@ -24,9 +24,8 @@
 #SOFTWARE.
 
 import tensorflow as tf
-
-__author__ = "Iván de Paz Centeno"
-
+import numpy as np
+__author__ = "Takchoi Yu"
 
 class Network(object):
 
@@ -39,8 +38,10 @@ class Network(object):
         self.__trainable = trainable
         self.__layers = {}
         self.__last_layer_name = None
+        self.__is_output = {}
+        self.__layers_task = {}
 
-        with tf.variable_scope(self.__class__.__name__.lower()):
+        with tf.variable_scope(self.__class__.__name__.lower(), reuse=tf.AUTO_REUSE):
             self._config()
 
     def _config(self):
@@ -50,7 +51,7 @@ class Network(object):
         """
         raise NotImplementedError("This method must be implemented by the network.")
 
-    def add_layer(self, name: str, layer_output):
+    def add_layer(self, name: str, layer_output, is_output: bool=False, task: str='all'):
         """
         Adds a layer to the network.
         :param name: name of the layer to add
@@ -58,6 +59,8 @@ class Network(object):
         """
         self.__layers[name] = layer_output
         self.__last_layer_name = name
+        self.__is_output[name] = is_output
+        self.__layers_task[name] = task
 
     def get_layer(self, name: str=None):
         """
@@ -109,3 +112,50 @@ class Network(object):
 
     def _feed(self, image):
         raise NotImplementedError("Method not implemented.")
+
+    def get_all_output(self):
+        """
+        Get all network output node
+        """
+        output = []
+        for name, is_output in self.__is_output.items():
+            if is_output:
+                output.append(self.__layers[name])
+        return output
+
+    def get_weight_decay(self, key: str='weights', item_type: str=None):
+        """
+        Get all with key
+        :param key: str item to be searched in trainable variable
+        """
+        variables = []
+        #with tf.variable_scope(self.__class__.__name__.lower()):
+        net_scope = self.__class__.__name__.lower()
+        if item_type is not None:
+            for name, task in self.__layers_task.items():
+                if task in ['all', item_type]:
+                    layer_scope = '/'.join([net_scope,name])
+                    vars_list =  tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=layer_scope)
+                    for var in vars_list:
+                        if var.name.find(key) > -1:
+                            variables.append(var)
+        else:
+            for variable in tf.trainable_variables():
+                if variable.name.find(key) > -1:
+                    variables.append(variable)
+        return variables
+
+    def load(self, data_path, session, prefix, ignore_missing=False):
+
+        data_dict = np.load(data_path, encoding='latin1').item()
+        for op_name in data_dict:
+            
+            with tf.variable_scope(prefix + op_name.lower(), reuse=True):
+                for param_name, data in data_dict[op_name].items():
+                    param_name = param_name.lower()
+                    try:
+                        var = tf.get_variable(param_name)
+                        session.run(var.assign(data))
+                    except ValueError:
+                        if not ignore_missing:
+                            raise
